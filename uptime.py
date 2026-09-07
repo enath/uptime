@@ -22,7 +22,7 @@ WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", 
 
 
 def format_day_label(day) -> str:
-    return f"{WEEKDAYS[day.weekday()]} {day.strftime('%Y-%m-%d')}"
+    return f"{WEEKDAYS[day.weekday()]} {day.strftime('%d.%m.%Y')}"
 
 
 def ping(host: str) -> bool:
@@ -213,8 +213,7 @@ def compute_dashboard_data(events: list[dict], days: int) -> dict:
     total_outages = len(filtered)
     total_downtime = sum((o["end"] - o["start"]).total_seconds() for o in filtered)
     avg_duration = total_downtime / total_outages if total_outages else 0.0
-    period_seconds = days * 86400
-    uptime_pct = max(0.0, (period_seconds - total_downtime) / period_seconds * 100)
+    avg_outages_per_day = total_outages / days
 
     return {
         "start_date": start_date,
@@ -224,7 +223,7 @@ def compute_dashboard_data(events: list[dict], days: int) -> dict:
         "total_outages": total_outages,
         "total_downtime_seconds": total_downtime,
         "avg_duration_seconds": avg_duration,
-        "uptime_pct": uptime_pct,
+        "avg_outages_per_day": avg_outages_per_day,
         "outages": sorted(filtered, key=lambda o: o["start"], reverse=True),
     }
 
@@ -245,38 +244,39 @@ def render_dashboard_html(data: dict) -> str:
         x = i * (chart_width / len(days_list))
         height = (info["total_seconds"] / max_seconds) * (chart_height - 4) if info["total_seconds"] else 0
         y = chart_height - height
-        title = f"{day.strftime('%a %Y-%m-%d')}: {info['count']} outage(s), {format_duration(info['total_seconds'])}"
+        title = f"{day.strftime('%a %d.%m.%Y')}: {info['count']} outage(s), {format_duration(info['total_seconds'])}"
         bars.append(
             f'<rect class="bar" x="{x:.1f}" y="{y:.1f}" width="{bar_width:.1f}" '
             f'height="{max(height, 1):.1f}" rx="2"><title>{title}</title></rect>'
         )
+        if info["total_seconds"] > 0:
+            minutes = max(1, round(info["total_seconds"] / 60))
+            bars.append(
+                f'<text class="downtime-label" x="{x + bar_width / 2:.1f}" y="{y - 6:.1f}" '
+                f'text-anchor="middle">{minutes}m</text>'
+            )
         if i % label_step == 0 or i == len(days_list) - 1:
             label_x = x + bar_width / 2
             bars.append(
                 f'<text class="axis-label" x="{label_x:.1f}" y="{chart_height + 16}" '
-                f'text-anchor="middle">{day.strftime("%m/%d")}</text>'
+                f'text-anchor="middle">{day.strftime("%d.%m")}</text>'
             )
 
     bars_svg = "\n".join(bars)
 
-    # Second chart: outage count per day, with a trailing moving-average trend line.
+    # Second chart: outage count per day, with a flat average line.
     counts = [data["daily"][day]["count"] for day in days_list]
     max_count = max(counts, default=0) or 1
-    trend_window = 3
-    trend = []
-    for i in range(len(counts)):
-        segment = counts[max(0, i - trend_window + 1):i + 1]
-        trend.append(sum(segment) / len(segment))
+    average = data["avg_outages_per_day"]
 
     count_bars = []
-    trend_points = []
     for i, day in enumerate(days_list):
         x = i * (chart_width / len(days_list))
         center_x = x + bar_width / 2
         count = counts[i]
         height = (count / max_count) * (chart_height - 4) if count else 0
         dot_y = chart_height - height
-        title = f"{day.strftime('%a %Y-%m-%d')}: {count} outage(s)"
+        title = f"{day.strftime('%a %d.%m.%Y')}: {count} outage(s)"
         count_bars.append(
             f'<line class="lollipop-stem" x1="{center_x:.1f}" y1="{chart_height}" '
             f'x2="{center_x:.1f}" y2="{dot_y:.1f}"></line>'
@@ -290,13 +290,12 @@ def render_dashboard_html(data: dict) -> str:
         if i % label_step == 0 or i == len(days_list) - 1:
             count_bars.append(
                 f'<text class="axis-label" x="{center_x:.1f}" y="{chart_height + 16}" '
-                f'text-anchor="middle">{day.strftime("%m/%d")}</text>'
+                f'text-anchor="middle">{day.strftime("%d.%m")}</text>'
             )
-        trend_y = chart_height - (trend[i] / max_count) * (chart_height - 4)
-        trend_points.append(f"{center_x:.1f},{trend_y:.1f}")
 
     count_bars_svg = "\n".join(count_bars)
-    trend_line_svg = f'<polyline class="trend-line" points="{" ".join(trend_points)}"></polyline>'
+    average_y = chart_height - (average / max_count) * (chart_height - 4)
+    average_line_svg = f'<line class="average-line" x1="0" y1="{average_y:.1f}" x2="{chart_width}" y2="{average_y:.1f}"></line>'
 
     if data["outages"]:
         rows = []
@@ -305,7 +304,7 @@ def render_dashboard_html(data: dict) -> str:
             end_label = o["end"].strftime("%H:%M") + (" (ongoing)" if o.get("ongoing") else "")
             rows.append(
                 "<tr>"
-                f'<td>{o["start"].strftime("%Y-%m-%d")}</td>'
+                f'<td>{o["start"].strftime("%d.%m.%Y")}</td>'
                 f'<td class="num">{o["start"].strftime("%H:%M")}</td>'
                 f'<td class="num">{end_label}</td>'
                 f'<td class="num">{duration}</td>'
@@ -315,7 +314,7 @@ def render_dashboard_html(data: dict) -> str:
     else:
         table_body = '<tr><td colspan="4" class="empty">No outages in this period</td></tr>'
 
-    period_label = f'{data["start_date"].strftime("%b %d, %Y")} - {data["end_date"].strftime("%b %d, %Y")} ({data["days"]} days)'
+    period_label = f'{data["start_date"].strftime("%d.%m.%Y")} - {data["end_date"].strftime("%d.%m.%Y")} ({data["days"]} days)'
 
     return f"""<!doctype html>
 <html lang="en">
@@ -333,7 +332,7 @@ def render_dashboard_html(data: dict) -> str:
     --gridline: #e1e0d9;
     --baseline: #c3c2b7;
     --series-1: #2a78d6;
-    --series-2: #eb6834;
+    --status-critical: #d03b3b;
     --border: rgba(11,11,11,0.10);
   }}
   * {{ box-sizing: border-box; }}
@@ -359,14 +358,15 @@ def render_dashboard_html(data: dict) -> str:
   }}
   .card h2 {{ font-size: 14px; margin: 0 0 16px; color: var(--text-secondary); }}
   svg {{ width: 100%; height: auto; overflow: visible; }}
-  .bar {{ fill: var(--series-1); }}
+  .bar {{ fill: var(--status-critical); }}
   .bar:hover {{ opacity: 0.75; }}
+  .downtime-label {{ fill: var(--status-critical); font-size: 10px; font-variant-numeric: tabular-nums; }}
   .axis-label {{ fill: var(--text-muted); font-size: 10px; }}
   .baseline {{ stroke: var(--baseline); stroke-width: 1; }}
-  .trend-line {{ fill: none; stroke: var(--series-2); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }}
-  .lollipop-stem {{ stroke: var(--series-1); stroke-width: 2; }}
-  .lollipop-dot {{ fill: var(--series-1); }}
-  .count-label {{ fill: var(--series-1); font-size: 10px; font-variant-numeric: tabular-nums; }}
+  .average-line {{ stroke: var(--series-1); stroke-width: 2; stroke-dasharray: 4 3; }}
+  .lollipop-stem {{ stroke: var(--status-critical); stroke-width: 2; }}
+  .lollipop-dot {{ fill: var(--status-critical); }}
+  .count-label {{ fill: var(--status-critical); font-size: 10px; font-variant-numeric: tabular-nums; }}
   .legend {{ display: flex; gap: 16px; margin-bottom: 12px; font-size: 12px; color: var(--text-secondary); }}
   .legend-item {{ display: flex; align-items: center; gap: 6px; }}
   .legend-swatch {{ width: 10px; height: 10px; border-radius: 2px; display: inline-block; }}
@@ -386,7 +386,7 @@ def render_dashboard_html(data: dict) -> str:
     <div class="tile"><div class="label">Outages</div><div class="value">{data["total_outages"]}</div></div>
     <div class="tile"><div class="label">Total downtime</div><div class="value">{format_duration(data["total_downtime_seconds"])}</div></div>
     <div class="tile"><div class="label">Avg. outage length</div><div class="value">{format_duration(data["avg_duration_seconds"])}</div></div>
-    <div class="tile"><div class="label">Uptime</div><div class="value">{data["uptime_pct"]:.2f}%</div></div>
+    <div class="tile"><div class="label">Avg. outages/day</div><div class="value">{data["avg_outages_per_day"]:.2f}</div></div>
   </div>
 
   <div class="card">
@@ -400,13 +400,13 @@ def render_dashboard_html(data: dict) -> str:
   <div class="card">
     <h2>Outages per day</h2>
     <div class="legend">
-      <span class="legend-item"><span class="legend-swatch" style="background: var(--series-1)"></span>Outages/day</span>
-      <span class="legend-item"><span class="legend-swatch" style="background: var(--series-2)"></span>{trend_window}-day trend</span>
+      <span class="legend-item"><span class="legend-swatch" style="background: var(--status-critical)"></span>Outages/day</span>
+      <span class="legend-item"><span class="legend-swatch" style="background: var(--series-1)"></span>Average</span>
     </div>
     <svg viewBox="0 0 {chart_width} {chart_height + 24}" preserveAspectRatio="none">
       <line class="baseline" x1="0" y1="{chart_height}" x2="{chart_width}" y2="{chart_height}"></line>
       {count_bars_svg}
-      {trend_line_svg}
+      {average_line_svg}
     </svg>
   </div>
 
