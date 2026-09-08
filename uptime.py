@@ -249,7 +249,7 @@ def compute_dashboard_data(events: list[dict], days: int) -> dict:
     }
 
 
-def render_dashboard_html(data: dict) -> str:
+def render_preset_section(key: str, label: str, data: dict, active: bool) -> str:
     days_list = sorted(data["daily"].keys())
     max_seconds = max((d["total_seconds"] for d in data["daily"].values()), default=0) or 1
 
@@ -336,9 +336,55 @@ def render_dashboard_html(data: dict) -> str:
         table_body = '<tr><td colspan="4" class="empty">No outages in this period</td></tr>'
 
     period_label = f'{data["start_date"].strftime("%d.%m.%Y")} - {data["end_date"].strftime("%d.%m.%Y")} ({data["days"]} days)'
+    hidden = "" if active else " hidden"
+
+    return f"""<div class="preset-view" data-preset="{key}"{hidden}>
+  <p class="subtitle">{period_label}</p>
+
+  <div class="tiles">
+    <div class="tile"><div class="label">Outages</div><div class="value">{data["total_outages"]}</div></div>
+    <div class="tile"><div class="label">Total downtime</div><div class="value">{format_duration(data["total_downtime_seconds"])}</div></div>
+    <div class="tile"><div class="label">Avg. outage length</div><div class="value">{format_duration(data["avg_duration_seconds"])}</div></div>
+    <div class="tile"><div class="label">Avg. outages/day</div><div class="value">{data["avg_outages_per_day"]:.2f}</div></div>
+  </div>
+
+  <div class="card">
+    <h2>[ Downtime per day ]</h2>
+    <svg class="chart" viewBox="0 0 {chart_width} {chart_height + 24}" preserveAspectRatio="none">
+      <line class="baseline" x1="0" y1="{chart_height}" x2="{chart_width}" y2="{chart_height}"></line>
+      {bars_svg}
+    </svg>
+  </div>
+
+  <div class="card">
+    <h2>[ Outages per day ]</h2>
+    <div class="legend">
+      <span class="legend-item"><span class="legend-swatch" style="background: var(--status-critical)"></span>Outages/day</span>
+      <span class="legend-item"><span class="legend-swatch" style="background: var(--series-1)"></span>Average</span>
+    </div>
+    <svg class="chart" viewBox="0 0 {chart_width} {chart_height + 24}" preserveAspectRatio="none">
+      <line class="baseline" x1="0" y1="{chart_height}" x2="{chart_width}" y2="{chart_height}"></line>
+      {count_bars_svg}
+      {average_line_svg}
+    </svg>
+  </div>
+
+  <div class="card">
+    <h2>[ Outages ({data["total_outages"]}) ]</h2>
+    <table>
+      <thead><tr><th>Date</th><th>Start</th><th>End</th><th>Duration</th></tr></thead>
+      <tbody>
+        {table_body}
+      </tbody>
+    </table>
+  </div>
+</div>"""
+
+
+def render_dashboard_html(presets: list[tuple[str, str, dict]], active_key: str, currently_down: bool) -> str:
     probe_targets = " · ".join(PING_HOSTS)
 
-    if data["currently_down"]:
+    if currently_down:
         dot_color, dot_label = "var(--status-critical)", "down"
     else:
         dot_color, dot_label = "#0ca30c", "live"
@@ -350,6 +396,14 @@ def render_dashboard_html(data: dict) -> str:
         '<rect x="11" y="4" width="3" height="12" rx="1" fill="var(--series-1)"></rect>'
         '<rect x="16.5" y="0" width="3" height="16" rx="1" fill="var(--series-1)"></rect>'
         '</svg>'
+    )
+
+    tabs = "\n    ".join(
+        f'<button class="tab-btn{" active" if key == active_key else ""}" data-preset="{key}">{label}</button>'
+        for key, label, _ in presets
+    )
+    sections = "\n\n".join(
+        render_preset_section(key, label, data, active=(key == active_key)) for key, label, data in presets
     )
 
     return f"""<!doctype html>
@@ -396,6 +450,14 @@ def render_dashboard_html(data: dict) -> str:
     0%, 100% {{ opacity: 1; }}
     50% {{ opacity: 0.35; }}
   }}
+  .tabs {{ display: flex; gap: 8px; margin: 16px 0 4px; }}
+  .tab-btn {{
+    font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; color: var(--text-secondary);
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 6px;
+    padding: 6px 12px; cursor: pointer;
+  }}
+  .tab-btn:hover {{ color: var(--text-primary); }}
+  .tab-btn.active {{ border-color: var(--anthracite); color: var(--text-primary); font-weight: 600; }}
   .subtitle {{ color: var(--text-secondary); margin: 4px 0 28px; font-size: 14px; }}
   .tiles {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 28px; }}
   .tile {{
@@ -443,48 +505,26 @@ def render_dashboard_html(data: dict) -> str:
     <h1>Internet Uptime Dashboard</h1>
     <span class="live-dot" style="--dot-color: {dot_color}">{dot_label}</span>
   </div>
-  <p class="subtitle">{period_label}</p>
 
-  <div class="tiles">
-    <div class="tile"><div class="label">Outages</div><div class="value">{data["total_outages"]}</div></div>
-    <div class="tile"><div class="label">Total downtime</div><div class="value">{format_duration(data["total_downtime_seconds"])}</div></div>
-    <div class="tile"><div class="label">Avg. outage length</div><div class="value">{format_duration(data["avg_duration_seconds"])}</div></div>
-    <div class="tile"><div class="label">Avg. outages/day</div><div class="value">{data["avg_outages_per_day"]:.2f}</div></div>
+  <div class="tabs">
+    {tabs}
   </div>
 
-  <div class="card">
-    <h2>[ Downtime per day ]</h2>
-    <svg class="chart" viewBox="0 0 {chart_width} {chart_height + 24}" preserveAspectRatio="none">
-      <line class="baseline" x1="0" y1="{chart_height}" x2="{chart_width}" y2="{chart_height}"></line>
-      {bars_svg}
-    </svg>
-  </div>
-
-  <div class="card">
-    <h2>[ Outages per day ]</h2>
-    <div class="legend">
-      <span class="legend-item"><span class="legend-swatch" style="background: var(--status-critical)"></span>Outages/day</span>
-      <span class="legend-item"><span class="legend-swatch" style="background: var(--series-1)"></span>Average</span>
-    </div>
-    <svg class="chart" viewBox="0 0 {chart_width} {chart_height + 24}" preserveAspectRatio="none">
-      <line class="baseline" x1="0" y1="{chart_height}" x2="{chart_width}" y2="{chart_height}"></line>
-      {count_bars_svg}
-      {average_line_svg}
-    </svg>
-  </div>
-
-  <div class="card">
-    <h2>[ Outages ({data["total_outages"]}) ]</h2>
-    <table>
-      <thead><tr><th>Date</th><th>Start</th><th>End</th><th>Duration</th></tr></thead>
-      <tbody>
-        {table_body}
-      </tbody>
-    </table>
-  </div>
+  {sections}
 
   <p class="footer">probe targets: {probe_targets}</p>
 </div>
+<script>
+  document.querySelectorAll(".tab-btn").forEach(function (btn) {{
+    btn.addEventListener("click", function () {{
+      var key = btn.dataset.preset;
+      document.querySelectorAll(".tab-btn").forEach(function (b) {{ b.classList.toggle("active", b === btn); }});
+      document.querySelectorAll(".preset-view").forEach(function (view) {{
+        view.hidden = view.dataset.preset !== key;
+      }});
+    }});
+  }});
+</script>
 </body>
 </html>
 """
@@ -492,8 +532,24 @@ def render_dashboard_html(data: dict) -> str:
 
 def cmd_dashboard(args: argparse.Namespace) -> None:
     events = read_events()
-    data = compute_dashboard_data(events, args.days)
-    html = render_dashboard_html(data)
+    outages = build_outages(events)
+    currently_down = bool(outages) and bool(outages[-1].get("ongoing"))
+
+    if outages:
+        earliest_day = min(o["start"].date() for o in outages)
+        all_days = max(1, (datetime.now().date() - earliest_day).days + 1)
+    else:
+        all_days = 30
+
+    presets = [
+        ("7", "7d", compute_dashboard_data(events, 7)),
+        ("30", "30d", compute_dashboard_data(events, 30)),
+        ("90", "90d", compute_dashboard_data(events, 90)),
+        ("all", "All", compute_dashboard_data(events, all_days)),
+    ]
+    active_key = str(args.days) if args.days in (7, 30, 90) else "30"
+
+    html = render_dashboard_html(presets, active_key, currently_down)
 
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -521,7 +577,7 @@ def main() -> None:
     report_parser.add_argument("--days", type=int, default=7, help="Number of days to show (default: 7)")
 
     dashboard_parser = subparsers.add_parser("dashboard", help="Generate an HTML dashboard")
-    dashboard_parser.add_argument("--days", type=int, default=30, help="Number of days to cover (default: 30)")
+    dashboard_parser.add_argument("--days", type=int, default=30, help="Which preset tab (7/30/90) is active by default; anything else falls back to 30. The page itself always includes all four (7/30/90/all) and lets you switch between them")
     dashboard_parser.add_argument("--output", default=str(DATA_FILE.parent / "dashboard.html"), help="Output HTML file path")
     dashboard_parser.add_argument("--no-open", action="store_true", help="Do not open the dashboard in a browser")
 

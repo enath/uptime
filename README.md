@@ -66,7 +66,7 @@ python3 uptime.py dashboard                 # last 30 days, opens in your browse
 python3 uptime.py dashboard --days 7 --no-open --output ~/Desktop/report.html
 ```
 
-Generates a self-contained HTML page (no external dependencies) with summary stats, a daily downtime chart, and a full outage table.
+Generates a self-contained HTML page (no external dependencies) with summary stats, a daily downtime chart, and a full outage table. The page includes four period tabs — **7d / 30d / 90d / All** — precomputed at generation time; clicking one switches the view instantly in the browser, no regeneration needed. `--days` only picks which tab is active when the page first opens.
 
 ## How it works
 
