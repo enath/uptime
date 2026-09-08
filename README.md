@@ -31,6 +31,19 @@ Every 10 minutes, even with nothing to report, it prints a heartbeat so you can 
 
 Add `--verbose` to also log every individual check (not just drops/recoveries) to `data/checks.log` — useful if an outage doesn't get detected and you need to see what each check actually returned. That file rotates automatically once it passes 5 MB, keeping one backup (`checks.log.1`).
 
+The detection thresholds are also adjustable without touching the code:
+
+```bash
+python3 uptime.py monitor --check-interval 5 --failure-threshold 2 --recovery-threshold 3 --heartbeat-interval 300
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--check-interval` | 10s | delay between connectivity checks |
+| `--failure-threshold` | 3 | consecutive failed checks before logging a `down` |
+| `--recovery-threshold` | 2 | consecutive successful checks before logging an `up` |
+| `--heartbeat-interval` | 600s | delay between heartbeat messages |
+
 ### Report
 
 ```bash

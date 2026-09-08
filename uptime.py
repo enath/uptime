@@ -105,11 +105,11 @@ def cmd_monitor(args: argparse.Namespace) -> None:
     consecutive_success = 0
     pending_down_start = None
     pending_up_start = None
-    # Backdated so the first heartbeat fires after one CHECK_INTERVAL instead
-    # of making the user wait a full HEARTBEAT_INTERVAL for proof of life.
-    last_heartbeat = datetime.now() - timedelta(seconds=HEARTBEAT_INTERVAL - CHECK_INTERVAL)
+    # Backdated so the first heartbeat fires after one check interval instead
+    # of making the user wait a full heartbeat interval for proof of life.
+    last_heartbeat = datetime.now() - timedelta(seconds=args.heartbeat_interval - args.check_interval)
 
-    print(f"Monitoring connection (checking every {CHECK_INTERVAL}s). Press Ctrl+C to stop.")
+    print(f"Monitoring connection (checking every {args.check_interval}s). Press Ctrl+C to stop.")
     if args.verbose:
         print(f"Verbose mode: logging every check to {CHECKS_LOG_FILE}")
 
@@ -120,7 +120,7 @@ def cmd_monitor(args: argparse.Namespace) -> None:
             if args.verbose:
                 log_check(now, connected, detail)
 
-            if (now - last_heartbeat).total_seconds() >= HEARTBEAT_INTERVAL:
+            if (now - last_heartbeat).total_seconds() >= args.heartbeat_interval:
                 print(f"💓 Heartbeat at {now.strftime('%H:%M:%S')}")
                 last_heartbeat = now
 
@@ -137,7 +137,7 @@ def cmd_monitor(args: argparse.Namespace) -> None:
                     if consecutive_success == 0:
                         pending_up_start = now
                     consecutive_success += 1
-                    if consecutive_success >= RECOVERY_THRESHOLD:
+                    if consecutive_success >= args.recovery_threshold:
                         up_time = pending_up_start or now
                         append_event("up", up_time)
                         duration = (up_time - down_start).total_seconds()
@@ -155,7 +155,7 @@ def cmd_monitor(args: argparse.Namespace) -> None:
                     if consecutive_fail == 0:
                         pending_down_start = now
                     consecutive_fail += 1
-                    if consecutive_fail >= FAILURE_THRESHOLD:
+                    if consecutive_fail >= args.failure_threshold:
                         down_start = pending_down_start or now
                         append_event("down", down_start)
                         message = f"Connection lost at {down_start.strftime('%H:%M:%S')}"
@@ -165,7 +165,7 @@ def cmd_monitor(args: argparse.Namespace) -> None:
                         consecutive_fail = 0
                         pending_down_start = None
 
-            time.sleep(CHECK_INTERVAL)
+            time.sleep(args.check_interval)
     except KeyboardInterrupt:
         print("\nMonitoring stopped.")
 
@@ -511,6 +511,10 @@ def main() -> None:
 
     monitor_parser = subparsers.add_parser("monitor", help="Continuously monitor the connection")
     monitor_parser.add_argument("--verbose", action="store_true", help="Log every check (not just transitions) to data/checks.log")
+    monitor_parser.add_argument("--check-interval", type=int, default=CHECK_INTERVAL, help=f"Seconds between checks (default: {CHECK_INTERVAL})")
+    monitor_parser.add_argument("--failure-threshold", type=int, default=FAILURE_THRESHOLD, help=f"Consecutive failures before declaring \"down\" (default: {FAILURE_THRESHOLD})")
+    monitor_parser.add_argument("--recovery-threshold", type=int, default=RECOVERY_THRESHOLD, help=f"Consecutive successes before declaring \"up\" (default: {RECOVERY_THRESHOLD})")
+    monitor_parser.add_argument("--heartbeat-interval", type=int, default=HEARTBEAT_INTERVAL, help=f"Seconds between heartbeat messages (default: {HEARTBEAT_INTERVAL})")
 
     report_parser = subparsers.add_parser("report", help="Show an outage report")
     report_parser.add_argument("--date", help="Specific day in YYYY-MM-DD format")
