@@ -91,7 +91,9 @@ def cmd_monitor(args: argparse.Namespace) -> None:
     consecutive_success = 0
     pending_down_start = None
     pending_up_start = None
-    last_heartbeat = datetime.now()
+    # Backdated so the first heartbeat fires after one CHECK_INTERVAL instead
+    # of making the user wait a full HEARTBEAT_INTERVAL for proof of life.
+    last_heartbeat = datetime.now() - timedelta(seconds=HEARTBEAT_INTERVAL - CHECK_INTERVAL)
 
     print(f"Monitoring connection (checking every {CHECK_INTERVAL}s). Press Ctrl+C to stop.")
     if args.verbose:
@@ -105,8 +107,7 @@ def cmd_monitor(args: argparse.Namespace) -> None:
                 log_check(now, connected, detail)
 
             if (now - last_heartbeat).total_seconds() >= HEARTBEAT_INTERVAL:
-                status = "down" if is_down else "up"
-                print(f"💓 Still monitoring at {now.strftime('%H:%M:%S')} (status: {status})")
+                print(f"💓 Heartbeat at {now.strftime('%H:%M:%S')}")
                 last_heartbeat = now
 
             if connected:

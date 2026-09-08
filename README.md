@@ -21,6 +21,12 @@ Checks connectivity every 10 seconds (ping to `1.1.1.1`/`8.8.8.8`). Prints a lin
 
 Press `Ctrl+C` to stop. Restarting after a crash mid-outage correctly resumes tracking that outage instead of losing it.
 
+Every 10 minutes, even with nothing to report, it prints a heartbeat so you can tell it's still alive and hasn't silently died (e.g. from the terminal tab being closed):
+
+```
+💓 Heartbeat at 14:12:41
+```
+
 Add `--verbose` to also log every individual check (not just drops/recoveries) to `data/checks.log` — useful if an outage doesn't get detected and you need to see what each check actually returned.
 
 ### Report
@@ -32,10 +38,10 @@ python3 uptime.py report --date 2026-09-06  # a specific day
 ```
 
 ```
-Saturday 2026-09-05: 2 outage(s), 5 min 40s total
+Saturday 05.09.2026: 2 outage(s), 5 min 40s total
   - 10:15 -> 10:19 (4 min 30s)
   - 14:02 -> 14:03 (1 min 10s)
-Sunday 2026-09-06: no outages
+Sunday 06.09.2026: no outages
 ```
 
 ### Dashboard
