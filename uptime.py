@@ -215,6 +215,7 @@ def compute_dashboard_data(events: list[dict], days: int) -> dict:
     total_downtime = sum((o["end"] - o["start"]).total_seconds() for o in filtered)
     avg_duration = total_downtime / total_outages if total_outages else 0.0
     avg_outages_per_day = total_outages / days
+    currently_down = any(o.get("ongoing") for o in filtered)
 
     return {
         "start_date": start_date,
@@ -225,6 +226,7 @@ def compute_dashboard_data(events: list[dict], days: int) -> dict:
         "total_downtime_seconds": total_downtime,
         "avg_duration_seconds": avg_duration,
         "avg_outages_per_day": avg_outages_per_day,
+        "currently_down": currently_down,
         "outages": sorted(filtered, key=lambda o: o["start"], reverse=True),
     }
 
@@ -316,6 +318,21 @@ def render_dashboard_html(data: dict) -> str:
         table_body = '<tr><td colspan="4" class="empty">No outages in this period</td></tr>'
 
     period_label = f'{data["start_date"].strftime("%d.%m.%Y")} - {data["end_date"].strftime("%d.%m.%Y")} ({data["days"]} days)'
+    probe_targets = " · ".join(PING_HOSTS)
+
+    if data["currently_down"]:
+        dot_color, dot_label = "var(--status-critical)", "down"
+    else:
+        dot_color, dot_label = "#0ca30c", "live"
+
+    signal_icon_svg = (
+        '<svg width="27.5" height="22" viewBox="0 0 20 16" fill="none">'
+        '<rect x="0" y="10" width="3" height="6" rx="1" fill="var(--series-1)"></rect>'
+        '<rect x="5.5" y="7" width="3" height="9" rx="1" fill="var(--series-1)"></rect>'
+        '<rect x="11" y="4" width="3" height="12" rx="1" fill="var(--series-1)"></rect>'
+        '<rect x="16.5" y="0" width="3" height="16" rx="1" fill="var(--series-1)"></rect>'
+        '</svg>'
+    )
 
     return f"""<!doctype html>
 <html lang="en">
@@ -323,10 +340,10 @@ def render_dashboard_html(data: dict) -> str:
 <meta charset="utf-8">
 <title>Internet Uptime Dashboard</title>
 <style>
-  .viz-root {{
+  :root {{
     color-scheme: light;
     --surface-1: #fcfcfb;
-    --page-plane: #f9f9f7;
+    --page-plane: #d7d5cf;
     --text-primary: #0b0b0b;
     --text-secondary: #52514e;
     --text-muted: #898781;
@@ -334,31 +351,54 @@ def render_dashboard_html(data: dict) -> str:
     --baseline: #c3c2b7;
     --series-1: #2a78d6;
     --status-critical: #d03b3b;
+    --anthracite: #2f3336;
     --border: rgba(11,11,11,0.10);
   }}
   * {{ box-sizing: border-box; }}
   body {{
     margin: 0;
-    background: var(--page-plane);
+    background-color: var(--page-plane);
+    background-image: radial-gradient(circle, var(--gridline) 1px, transparent 1px);
+    background-size: 22px 22px;
     font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
     color: var(--text-primary);
   }}
   .wrap {{ max-width: 900px; margin: 0 auto; padding: 32px 20px 60px; }}
-  h1 {{ font-size: 22px; margin: 0 0 4px; }}
-  .subtitle {{ color: var(--text-secondary); margin: 0 0 28px; font-size: 14px; }}
+  .title-row {{ display: flex; align-items: center; gap: 10px; }}
+  h1 {{ font-size: 22px; margin: 0; }}
+  .live-dot {{
+    display: inline-flex; align-items: center; gap: 6px; margin-left: auto;
+    font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; color: var(--text-muted);
+  }}
+  .live-dot::before {{
+    content: ""; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--dot-color); animation: pulse 2s ease-in-out infinite;
+  }}
+  @keyframes pulse {{
+    0%, 100% {{ opacity: 1; }}
+    50% {{ opacity: 0.35; }}
+  }}
+  .subtitle {{ color: var(--text-secondary); margin: 4px 0 28px; font-size: 14px; }}
   .tiles {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 28px; }}
   .tile {{
-    background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
-    padding: 16px;
+    background: var(--surface-1); border: 1px solid var(--border); border-left: 3px solid var(--anthracite);
+    border-radius: 6px; padding: 16px; box-shadow: 0 1px 3px rgba(11,11,11,0.05);
   }}
   .tile .label {{ font-size: 12px; color: var(--text-muted); margin-bottom: 6px; }}
   .tile .value {{ font-size: 24px; font-weight: 600; }}
   .card {{
-    background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
-    padding: 20px; margin-bottom: 28px;
+    background: var(--surface-1); border: 1px solid var(--border); border-top: 3px solid var(--anthracite);
+    border-radius: 6px; padding: 20px; margin-bottom: 28px; box-shadow: 0 1px 3px rgba(11,11,11,0.05);
   }}
-  .card h2 {{ font-size: 14px; margin: 0 0 16px; color: var(--text-secondary); }}
-  svg {{ width: 100%; height: auto; overflow: visible; }}
+  .card h2 {{
+    font-size: 13px; margin: 0 0 16px; color: var(--text-secondary);
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+  }}
+  .footer {{
+    margin-top: 8px; font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 11px; color: var(--text-muted);
+  }}
+  svg.chart {{ width: 100%; height: auto; overflow: visible; }}
   .bar {{ fill: var(--status-critical); }}
   .bar:hover {{ opacity: 0.75; }}
   .downtime-label {{ fill: var(--status-critical); font-size: 10px; font-variant-numeric: tabular-nums; }}
@@ -380,7 +420,11 @@ def render_dashboard_html(data: dict) -> str:
 </head>
 <body>
 <div class="viz-root wrap">
-  <h1>Internet Uptime Dashboard</h1>
+  <div class="title-row">
+    {signal_icon_svg}
+    <h1>Internet Uptime Dashboard</h1>
+    <span class="live-dot" style="--dot-color: {dot_color}">{dot_label}</span>
+  </div>
   <p class="subtitle">{period_label}</p>
 
   <div class="tiles">
@@ -391,20 +435,20 @@ def render_dashboard_html(data: dict) -> str:
   </div>
 
   <div class="card">
-    <h2>Downtime per day</h2>
-    <svg viewBox="0 0 {chart_width} {chart_height + 24}" preserveAspectRatio="none">
+    <h2>[ Downtime per day ]</h2>
+    <svg class="chart" viewBox="0 0 {chart_width} {chart_height + 24}" preserveAspectRatio="none">
       <line class="baseline" x1="0" y1="{chart_height}" x2="{chart_width}" y2="{chart_height}"></line>
       {bars_svg}
     </svg>
   </div>
 
   <div class="card">
-    <h2>Outages per day</h2>
+    <h2>[ Outages per day ]</h2>
     <div class="legend">
       <span class="legend-item"><span class="legend-swatch" style="background: var(--status-critical)"></span>Outages/day</span>
       <span class="legend-item"><span class="legend-swatch" style="background: var(--series-1)"></span>Average</span>
     </div>
-    <svg viewBox="0 0 {chart_width} {chart_height + 24}" preserveAspectRatio="none">
+    <svg class="chart" viewBox="0 0 {chart_width} {chart_height + 24}" preserveAspectRatio="none">
       <line class="baseline" x1="0" y1="{chart_height}" x2="{chart_width}" y2="{chart_height}"></line>
       {count_bars_svg}
       {average_line_svg}
@@ -412,7 +456,7 @@ def render_dashboard_html(data: dict) -> str:
   </div>
 
   <div class="card">
-    <h2>Outages ({data["total_outages"]})</h2>
+    <h2>[ Outages ({data["total_outages"]}) ]</h2>
     <table>
       <thead><tr><th>Date</th><th>Start</th><th>End</th><th>Duration</th></tr></thead>
       <tbody>
@@ -420,6 +464,8 @@ def render_dashboard_html(data: dict) -> str:
       </tbody>
     </table>
   </div>
+
+  <p class="footer">probe targets: {probe_targets}</p>
 </div>
 </body>
 </html>
