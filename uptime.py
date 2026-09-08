@@ -8,6 +8,8 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
 
+VERSION = "1.0.0"
+
 DATA_FILE = Path(__file__).parent / "data" / "events.jsonl"
 CHECKS_LOG_FILE = Path(__file__).parent / "data" / "checks.log"
 
@@ -512,7 +514,7 @@ def render_dashboard_html(presets: list[tuple[str, str, dict]], active_key: str,
 
   {sections}
 
-  <p class="footer">probe targets: {probe_targets}</p>
+  <p class="footer">probe targets: {probe_targets} · uptime.py v{VERSION}</p>
 </div>
 <script>
   document.querySelectorAll(".tab-btn").forEach(function (btn) {{
@@ -547,7 +549,7 @@ def cmd_dashboard(args: argparse.Namespace) -> None:
         ("90", "90d", compute_dashboard_data(events, 90)),
         ("all", "All", compute_dashboard_data(events, all_days)),
     ]
-    active_key = str(args.days) if args.days in (7, 30, 90) else "30"
+    active_key = str(args.days) if args.days in (7, 30, 90) else "7"
 
     html = render_dashboard_html(presets, active_key, currently_down)
 
@@ -577,7 +579,7 @@ def main() -> None:
     report_parser.add_argument("--days", type=int, default=7, help="Number of days to show (default: 7)")
 
     dashboard_parser = subparsers.add_parser("dashboard", help="Generate an HTML dashboard")
-    dashboard_parser.add_argument("--days", type=int, default=30, help="Which preset tab (7/30/90) is active by default; anything else falls back to 30. The page itself always includes all four (7/30/90/all) and lets you switch between them")
+    dashboard_parser.add_argument("--days", type=int, default=7, help="Which preset tab (7/30/90) is active by default; anything else falls back to 7. The page itself always includes all four (7/30/90/all) and lets you switch between them")
     dashboard_parser.add_argument("--output", default=str(DATA_FILE.parent / "dashboard.html"), help="Output HTML file path")
     dashboard_parser.add_argument("--no-open", action="store_true", help="Do not open the dashboard in a browser")
 

@@ -4,6 +4,8 @@ A small local tool that monitors your internet connection and reports on outages
 
 No dependencies beyond Python 3's standard library.
 
+**Status: v1.0.0 — feature-frozen.** The tool covers what it set out to do (monitor, report, dashboard); no new features are planned for now, only bug fixes if something turns up.
+
 ## Usage
 
 ### Monitor (run this in a terminal, leave it running)
@@ -62,8 +64,8 @@ Sunday 06.09.2026: no outages
 ### Dashboard
 
 ```bash
-python3 uptime.py dashboard                 # last 30 days, opens in your browser
-python3 uptime.py dashboard --days 7 --no-open --output ~/Desktop/report.html
+python3 uptime.py dashboard                 # last 7 days active by default, opens in your browser
+python3 uptime.py dashboard --days 30 --no-open --output ~/Desktop/report.html
 ```
 
 Generates a self-contained HTML page (no external dependencies) with summary stats, a daily downtime chart, and a full outage table. The page includes four period tabs — **7d / 30d / 90d / All** — precomputed at generation time; clicking one switches the view instantly in the browser, no regeneration needed. `--days` only picks which tab is active when the page first opens.
