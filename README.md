@@ -27,7 +27,7 @@ Every 10 minutes, even with nothing to report, it prints a heartbeat so you can 
 💓 Heartbeat at 14:12:41
 ```
 
-Add `--verbose` to also log every individual check (not just drops/recoveries) to `data/checks.log` — useful if an outage doesn't get detected and you need to see what each check actually returned.
+Add `--verbose` to also log every individual check (not just drops/recoveries) to `data/checks.log` — useful if an outage doesn't get detected and you need to see what each check actually returned. That file rotates automatically once it passes 5 MB, keeping one backup (`checks.log.1`).
 
 ### Report
 
@@ -58,3 +58,11 @@ Generates a self-contained HTML page (no external dependencies) with summary sta
 Data is stored in `data/events.jsonl`, an append-only log of connection state changes (not every individual check). `report` and `dashboard` read this file; only `monitor` writes to it.
 
 **Don't edit or delete `data/events.jsonl` while `monitor` is running** — it's your real outage history and isn't backed up.
+
+## Tests
+
+```bash
+python3 -m unittest test_uptime -v
+```
+
+Covers the pure logic (outage reconstruction, duration/date formatting, dashboard stats, log rotation) — not the actual network check or the live `monitor` loop.

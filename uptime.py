@@ -15,6 +15,7 @@ CHECK_INTERVAL = 10  # seconds between checks
 FAILURE_THRESHOLD = 3  # consecutive failures before declaring "down"
 RECOVERY_THRESHOLD = 2  # consecutive successes before declaring "up"
 HEARTBEAT_INTERVAL = 600  # seconds between "still running" heartbeats
+MAX_CHECKS_LOG_SIZE = 5 * 1024 * 1024  # rotate checks.log past this size
 
 PING_HOSTS = ["1.1.1.1", "8.8.8.8"]
 
@@ -46,6 +47,9 @@ def check_connectivity() -> tuple[bool, str]:
 
 def log_check(timestamp: datetime, connected: bool, detail: str) -> None:
     CHECKS_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    if CHECKS_LOG_FILE.exists() and CHECKS_LOG_FILE.stat().st_size >= MAX_CHECKS_LOG_SIZE:
+        rotated = CHECKS_LOG_FILE.parent / f"{CHECKS_LOG_FILE.name}.1"
+        CHECKS_LOG_FILE.replace(rotated)
     with CHECKS_LOG_FILE.open("a") as f:
         f.write(json.dumps({"timestamp": timestamp.isoformat(), "connected": connected, "detail": detail}) + "\n")
 

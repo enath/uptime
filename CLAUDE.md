@@ -14,17 +14,18 @@ python3 uptime.py monitor --verbose               # also log every check (not ju
 python3 uptime.py report --days 7                # text report, last N days (default 7)
 python3 uptime.py report --date 2026-09-06       # text report for a specific day
 python3 uptime.py dashboard --days 30 --no-open  # generate data/dashboard.html
-python3 -m py_compile uptime.py                  # syntax check (no test suite exists)
+python3 -m py_compile uptime.py                  # syntax check
+python3 -m unittest test_uptime -v               # run the unit tests
 ```
 
-There is no build step, linter, or test suite configured for this project.
+There is no build step or linter configured for this project. `test_uptime.py` (stdlib `unittest`) covers the pure functions only — `build_outages`, `format_duration`, `format_day_label`, `compute_dashboard_data`, and `log_check`'s rotation — never the network check or the live `monitor` loop.
 
 ## Architecture
 
 - **Data model**: only state *transitions* are persisted, not every check. `data/events.jsonl` is an append-only log of `{"event": "down"|"up", "timestamp": ...}` lines. An outage is reconstructed by pairing a `down` with the next `up` (`build_outages()`); an unpaired trailing `down` means an outage still in progress.
 - **Connectivity check** (`check_connectivity`): ping `1.1.1.1`/`8.8.8.8` only, returns `(connected, detail)`. Uses macOS/BSD `ping` flags (`-c`, `-t`) — not portable to Linux as-is. There used to be an HTTP GET fallback (`google.com`/`cloudflare.com`) for networks that block ICMP; it was removed after real-world evidence (via `--verbose`/`checks.log`) showed `urllib.request.urlopen(url, timeout=3)` can block for ~74s during a real outage — the `timeout` parameter doesn't bound DNS resolution (`getaddrinfo`), so during an outage a single check could take far longer than `CHECK_INTERVAL`, which delayed or entirely prevented `FAILURE_THRESHOLD` from being reached before the outage self-resolved. If a network-blocks-ICMP fallback is ever reintroduced, it must run under a hard wall-clock timeout (e.g. a thread with `future.result(timeout=...)`), not rely on `urlopen`'s `timeout` alone.
 - **Debounce state machine** (in `cmd_monitor`): raw check results are noisy, so `FAILURE_THRESHOLD`/`RECOVERY_THRESHOLD` consecutive-result counters gate the actual `down`/`up` events that get logged, and the logged timestamp is backdated to the *first* failing/succeeding check in the streak (not the moment the threshold was crossed) so the recorded duration matches reality. The failure counter decays by 1 on a lone success instead of hard-resetting to 0 (leaky bucket), so a single stray successful check during a flapping outage (e.g. a router mid-reconnect) doesn't erase all progress toward declaring "down".
-- **`--verbose` check log**: `monitor --verbose` appends every raw check result (not just transitions) to `data/checks.log` as JSONL (`{timestamp, connected, detail}`). Use it to diagnose detection issues with hard data instead of guessing — it's what surfaced the DNS-hang bug above.
+- **`--verbose` check log**: `monitor --verbose` appends every raw check result (not just transitions) to `data/checks.log` as JSONL (`{timestamp, connected, detail}`). Use it to diagnose detection issues with hard data instead of guessing — it's what surfaced the DNS-hang bug above. `log_check()` rotates this file to `checks.log.1` (single backup, overwritten each time) once it passes `MAX_CHECKS_LOG_SIZE` (5 MB) — verbose mode logs one line per check indefinitely, so without this it grows unbounded.
 - **Resume-on-restart**: `cmd_monitor` inspects the last line of `events.jsonl` on startup — if it's an unpaired `down`, it resumes in the "down" state instead of assuming connectivity.
 - **`report` and `dashboard` are pure readers**: both call `read_events()` + `build_outages()` and never write to the log. Only `cmd_monitor` (via `append_event`) writes.
 - **Dashboard HTML** (`render_dashboard_html`): self-contained, no external CSS/JS/CDN dependencies (deliberate, given the subject matter — a network monitoring tool shouldn't need network access to render its own report). Chart is hand-built SVG, not a charting library. Theme is fixed light (previously had a `prefers-color-scheme: dark` block; removed after a contrast bug made numbers unreadable).
