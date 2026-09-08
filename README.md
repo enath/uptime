@@ -21,6 +21,8 @@ Checks connectivity every 10 seconds (ping to `1.1.1.1`/`8.8.8.8`). Prints a lin
 🟢 Connection restored at 14:02:41 (duration: 30s)
 ```
 
+![uptime.py monitor running in a terminal](uptime-run.png)
+
 The notification means you'll get alerted even if the terminal isn't in the foreground. It's macOS-only (via `osascript`) and fails silently if notifications aren't available (e.g. running headless over SSH) — it never interrupts monitoring.
 
 Press `Ctrl+C` to stop. Restarting after a crash mid-outage correctly resumes tracking that outage instead of losing it.
@@ -69,6 +71,8 @@ python3 uptime.py dashboard --days 30 --no-open --output ~/Desktop/report.html
 ```
 
 Generates a self-contained HTML page (no external dependencies) with summary stats, a daily downtime chart, and a full outage table. The page includes four period tabs — **7d / 30d / 90d / All** — precomputed at generation time; clicking one switches the view instantly in the browser, no regeneration needed. `--days` only picks which tab is active when the page first opens.
+
+![uptime.py dashboard HTML page](uptime-dashboard.png)
 
 ## How it works
 
