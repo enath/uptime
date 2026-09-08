@@ -12,12 +12,14 @@ No dependencies beyond Python 3's standard library.
 python3 uptime.py monitor
 ```
 
-Checks connectivity every 10 seconds (ping to `1.1.1.1`/`8.8.8.8`). Prints a line whenever the connection drops or comes back:
+Checks connectivity every 10 seconds (ping to `1.1.1.1`/`8.8.8.8`). Prints a line — and sends a macOS notification — whenever the connection drops or comes back:
 
 ```
 🔴 Connection lost at 14:02:11
 🟢 Connection restored at 14:02:41 (duration: 30s)
 ```
+
+The notification means you'll get alerted even if the terminal isn't in the foreground. It's macOS-only (via `osascript`) and fails silently if notifications aren't available (e.g. running headless over SSH) — it never interrupts monitoring.
 
 Press `Ctrl+C` to stop. Restarting after a crash mid-outage correctly resumes tracking that outage instead of losing it.
 

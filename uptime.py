@@ -45,6 +45,16 @@ def check_connectivity() -> tuple[bool, str]:
     return False, "all_failed"
 
 
+def notify(title: str, message: str) -> None:
+    escaped_title = title.replace("\\", "\\\\").replace('"', '\\"')
+    escaped_message = message.replace("\\", "\\\\").replace('"', '\\"')
+    script = f'display notification "{escaped_message}" with title "{escaped_title}"'
+    try:
+        subprocess.run(["osascript", "-e", script], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+
 def log_check(timestamp: datetime, connected: bool, detail: str) -> None:
     CHECKS_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
     if CHECKS_LOG_FILE.exists() and CHECKS_LOG_FILE.stat().st_size >= MAX_CHECKS_LOG_SIZE:
@@ -131,7 +141,9 @@ def cmd_monitor(args: argparse.Namespace) -> None:
                         up_time = pending_up_start or now
                         append_event("up", up_time)
                         duration = (up_time - down_start).total_seconds()
-                        print(f"🟢 Connection restored at {up_time.strftime('%H:%M:%S')} (duration: {format_duration(duration)})")
+                        message = f"Connection restored at {up_time.strftime('%H:%M:%S')} (duration: {format_duration(duration)})"
+                        print(f"🟢 {message}")
+                        notify("Internet uptime", message)
                         is_down = False
                         consecutive_success = 0
                         pending_up_start = None
@@ -146,7 +158,9 @@ def cmd_monitor(args: argparse.Namespace) -> None:
                     if consecutive_fail >= FAILURE_THRESHOLD:
                         down_start = pending_down_start or now
                         append_event("down", down_start)
-                        print(f"🔴 Connection lost at {down_start.strftime('%H:%M:%S')}")
+                        message = f"Connection lost at {down_start.strftime('%H:%M:%S')}"
+                        print(f"🔴 {message}")
+                        notify("Internet uptime", message)
                         is_down = True
                         consecutive_fail = 0
                         pending_down_start = None
