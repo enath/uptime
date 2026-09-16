@@ -4,7 +4,7 @@ A small local tool that monitors your internet connection and reports on outages
 
 No dependencies beyond Python 3's standard library.
 
-**Status: v1.0.0 — feature-frozen.** The tool covers what it set out to do (monitor, report, dashboard); no new features are planned for now, only bug fixes if something turns up.
+**Status: v1.1.1.** The tool covers what it set out to do (monitor, report, dashboard); no new features are planned beyond this, only bug fixes if something turns up.
 
 ## Usage
 
@@ -33,6 +33,8 @@ Every 10 minutes, even with nothing to report, it prints a heartbeat so you can 
 💓 Heartbeat at 14:12:41
 ```
 
+That heartbeat is also saved to `data/events.jsonl` as an `alive` marker — it's what lets `report`/`dashboard` tell "confirmed no outage" apart from "we simply have no data" (see below).
+
 Add `--verbose` to also log every individual check (not just drops/recoveries) to `data/checks.log` — useful if an outage doesn't get detected and you need to see what each check actually returned. That file rotates automatically once it passes 5 MB, keeping one backup (`checks.log.1`).
 
 The detection thresholds are also adjustable without touching the code:
@@ -60,8 +62,11 @@ python3 uptime.py report --date 2026-09-06  # a specific day
 Saturday 05.09.2026: 2 outage(s), 5 min 40s total
   - 10:15 -> 10:19 (4 min 30s)
   - 14:02 -> 14:03 (1 min 10s)
+  ⚠ not monitored 18:00 -> 23:59 (5h 59min)
 Sunday 06.09.2026: no outages
 ```
+
+A `⚠ not monitored` line means `monitor` wasn't confirmed running for that stretch (30+ minutes of silence — no heartbeat, no transition) — whether it was stopped on purpose, crashed, or the machine was off. It's not counted as an outage, but it's not counted as confirmed uptime either. This only works going forward from whichever run of `monitor` first started saving `alive` markers — older history has no way to tell a quiet day from an unmonitored one.
 
 ### Dashboard
 
@@ -71,6 +76,8 @@ python3 uptime.py dashboard --days 30 --no-open --output ~/Desktop/report.html
 ```
 
 Generates a self-contained HTML page (no external dependencies) with summary stats, a daily downtime chart, and a full outage table. The page includes four period tabs — **7d / 30d / 90d / All** — precomputed at generation time; clicking one switches the view instantly in the browser, no regeneration needed. `--days` only picks which tab is active when the page first opens.
+
+Days with an unmonitored gap (see above) are drawn in gray on both charts instead of red, so they never look like a confirmed clean day — hover for how long. A "Monitored: X/Y days" tile shows how many days in the period actually have full coverage.
 
 ![uptime.py dashboard HTML page](uptime-dashboard.png)
 
@@ -86,4 +93,4 @@ Data is stored in `data/events.jsonl`, an append-only log of connection state ch
 python3 -m unittest test_uptime -v
 ```
 
-Covers the pure logic (outage reconstruction, duration/date formatting, dashboard stats, log rotation) — not the actual network check or the live `monitor` loop.
+Covers the pure logic (outage reconstruction, coverage-gap detection, duration/date formatting, dashboard stats, log rotation) — not the actual network check or the live `monitor` loop.

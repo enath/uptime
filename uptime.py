@@ -8,7 +8,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
 
-VERSION = "1.0.0"
+VERSION = "1.1.1"
 
 DATA_FILE = Path(__file__).parent / "data" / "events.jsonl"
 CHECKS_LOG_FILE = Path(__file__).parent / "data" / "checks.log"
@@ -18,6 +18,7 @@ FAILURE_THRESHOLD = 3  # consecutive failures before declaring "down"
 RECOVERY_THRESHOLD = 2  # consecutive successes before declaring "up"
 HEARTBEAT_INTERVAL = 600  # seconds between "still running" heartbeats
 MAX_CHECKS_LOG_SIZE = 5 * 1024 * 1024  # rotate checks.log past this size
+GAP_THRESHOLD_SECONDS = 1800  # silence longer than this = an unmonitored gap
 
 PING_HOSTS = ["1.1.1.1", "8.8.8.8"]
 
@@ -57,19 +58,31 @@ def notify(title: str, message: str) -> None:
         pass
 
 
+def append_jsonl(path: Path, obj: dict) -> None:
+    """Append one JSON object as a line, guarding against a missing trailing
+    newline on the existing last line (e.g. from a write cut short by a crash)
+    gluing this new line onto it and corrupting both."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    needs_leading_newline = False
+    if path.exists() and path.stat().st_size > 0:
+        with path.open("rb") as f:
+            f.seek(-1, 2)
+            needs_leading_newline = f.read(1) != b"\n"
+    with path.open("a") as f:
+        if needs_leading_newline:
+            f.write("\n")
+        f.write(json.dumps(obj) + "\n")
+
+
 def log_check(timestamp: datetime, connected: bool, detail: str) -> None:
-    CHECKS_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
     if CHECKS_LOG_FILE.exists() and CHECKS_LOG_FILE.stat().st_size >= MAX_CHECKS_LOG_SIZE:
         rotated = CHECKS_LOG_FILE.parent / f"{CHECKS_LOG_FILE.name}.1"
         CHECKS_LOG_FILE.replace(rotated)
-    with CHECKS_LOG_FILE.open("a") as f:
-        f.write(json.dumps({"timestamp": timestamp.isoformat(), "connected": connected, "detail": detail}) + "\n")
+    append_jsonl(CHECKS_LOG_FILE, {"timestamp": timestamp.isoformat(), "connected": connected, "detail": detail})
 
 
 def append_event(event: str, timestamp: datetime) -> None:
-    DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with DATA_FILE.open("a") as f:
-        f.write(json.dumps({"event": event, "timestamp": timestamp.isoformat()}) + "\n")
+    append_jsonl(DATA_FILE, {"event": event, "timestamp": timestamp.isoformat()})
 
 
 def read_events() -> list[dict]:
@@ -124,6 +137,7 @@ def cmd_monitor(args: argparse.Namespace) -> None:
 
             if (now - last_heartbeat).total_seconds() >= args.heartbeat_interval:
                 print(f"💓 Heartbeat at {now.strftime('%H:%M:%S')}")
+                append_event("alive", now)
                 last_heartbeat = now
 
             if connected:
@@ -187,9 +201,27 @@ def build_outages(events: list[dict]) -> list[dict]:
     return outages
 
 
+def compute_coverage_gaps(events: list[dict], gap_threshold_seconds: float = GAP_THRESHOLD_SECONDS) -> list[dict]:
+    """Find silences between events (of any type) longer than the threshold.
+
+    Each such silence means monitor wasn't confirmed running — whether from a
+    clean stop, a crash, or the machine being off — so that stretch of time is
+    neither confirmed "up" nor a detected outage, just unmeasured.
+    """
+    timestamps = sorted(datetime.fromisoformat(e["timestamp"]) for e in events)
+    gaps = []
+    for prev, curr in zip(timestamps, timestamps[1:]):
+        if (curr - prev).total_seconds() >= gap_threshold_seconds:
+            gaps.append({"start": prev, "end": curr})
+    if timestamps and (datetime.now() - timestamps[-1]).total_seconds() >= gap_threshold_seconds:
+        gaps.append({"start": timestamps[-1], "end": datetime.now()})
+    return gaps
+
+
 def cmd_report(args: argparse.Namespace) -> None:
     events = read_events()
     outages = build_outages(events)
+    gaps = compute_coverage_gaps(events)
 
     if args.date:
         target_date = datetime.strptime(args.date, "%Y-%m-%d").date()
@@ -204,17 +236,27 @@ def cmd_report(args: argparse.Namespace) -> None:
 
     for day in dates:
         day_outages = sorted(by_day.get(day, []), key=lambda o: o["start"])
+        day_gaps = [g for g in gaps if g["start"].date() <= day <= g["end"].date()]
         label = format_day_label(day)
-        if not day_outages:
+
+        if day_outages:
+            total_seconds = sum((o["end"] - o["start"]).total_seconds() for o in day_outages)
+            print(f"{label}: {len(day_outages)} outage(s), {format_duration(total_seconds)} total")
+            for o in day_outages:
+                start_str = o["start"].strftime("%H:%M")
+                end_str = o["end"].strftime("%H:%M") + (" (ongoing)" if o.get("ongoing") else "")
+                duration = format_duration((o["end"] - o["start"]).total_seconds())
+                print(f"  - {start_str} -> {end_str} ({duration})")
+        else:
             print(f"{label}: no outages")
-            continue
-        total_seconds = sum((o["end"] - o["start"]).total_seconds() for o in day_outages)
-        print(f"{label}: {len(day_outages)} outage(s), {format_duration(total_seconds)} total")
-        for o in day_outages:
-            start_str = o["start"].strftime("%H:%M")
-            end_str = o["end"].strftime("%H:%M") + (" (ongoing)" if o.get("ongoing") else "")
-            duration = format_duration((o["end"] - o["start"]).total_seconds())
-            print(f"  - {start_str} -> {end_str} ({duration})")
+
+        day_start = datetime.combine(day, datetime.min.time())
+        day_end = day_start + timedelta(days=1)
+        for g in day_gaps:
+            clipped_start = max(g["start"], day_start)
+            clipped_end = min(g["end"], day_end)
+            duration = format_duration((clipped_end - clipped_start).total_seconds())
+            print(f"  ⚠ not monitored {clipped_start.strftime('%H:%M')} -> {clipped_end.strftime('%H:%M')} ({duration})")
 
 
 def compute_dashboard_data(events: list[dict], days: int) -> dict:
@@ -230,6 +272,22 @@ def compute_dashboard_data(events: list[dict], days: int) -> dict:
         duration = (o["end"] - o["start"]).total_seconds()
         daily[day]["total_seconds"] += duration
         daily[day]["count"] += 1
+
+    gaps = compute_coverage_gaps(events)
+    for day, info in daily.items():
+        day_start = datetime.combine(day, datetime.min.time())
+        day_end = day_start + timedelta(days=1)
+        gap_seconds = 0.0
+        for g in gaps:
+            overlap_start = max(g["start"], day_start)
+            overlap_end = min(g["end"], day_end)
+            if overlap_end > overlap_start:
+                gap_seconds += (overlap_end - overlap_start).total_seconds()
+        info["gap_seconds"] = gap_seconds
+        info["has_gap"] = gap_seconds > 0
+
+    monitored_days = sum(1 for info in daily.values() if not info["has_gap"])
+    period_gaps = [g for g in gaps if g["end"].date() >= start_date and g["start"].date() <= today]
 
     total_outages = len(filtered)
     total_downtime = sum((o["end"] - o["start"]).total_seconds() for o in filtered)
@@ -248,6 +306,8 @@ def compute_dashboard_data(events: list[dict], days: int) -> dict:
         "avg_outages_per_day": avg_outages_per_day,
         "currently_down": currently_down,
         "outages": sorted(filtered, key=lambda o: o["start"], reverse=True),
+        "monitored_days": monitored_days,
+        "coverage_gaps": period_gaps,
     }
 
 
@@ -262,20 +322,25 @@ def render_preset_section(key: str, label: str, data: dict, active: bool) -> str
     label_step = max(1, len(days_list) // 8)
 
     bars = []
+    has_gap_day = any(info["has_gap"] for info in data["daily"].values())
     for i, day in enumerate(days_list):
         info = data["daily"][day]
         x = i * (chart_width / len(days_list))
         height = (info["total_seconds"] / max_seconds) * (chart_height - 4) if info["total_seconds"] else 0
         y = chart_height - height
         title = f"{day.strftime('%a %d.%m.%Y')}: {info['count']} outage(s), {format_duration(info['total_seconds'])}"
+        if info["has_gap"]:
+            title += f" — not monitored {format_duration(info['gap_seconds'])}"
+        bar_class = "bar-gap" if info["has_gap"] else "bar"
         bars.append(
-            f'<rect class="bar" x="{x:.1f}" y="{y:.1f}" width="{bar_width:.1f}" '
+            f'<rect class="{bar_class}" x="{x:.1f}" y="{y:.1f}" width="{bar_width:.1f}" '
             f'height="{max(height, 1):.1f}" rx="2"><title>{title}</title></rect>'
         )
         if info["total_seconds"] > 0:
             minutes = max(1, round(info["total_seconds"] / 60))
+            label_class = "downtime-label-gap" if info["has_gap"] else "downtime-label"
             bars.append(
-                f'<text class="downtime-label" x="{x + bar_width / 2:.1f}" y="{y - 6:.1f}" '
+                f'<text class="{label_class}" x="{x + bar_width / 2:.1f}" y="{y - 6:.1f}" '
                 f'text-anchor="middle">{minutes}m</text>'
             )
         if i % label_step == 0 or i == len(days_list) - 1:
@@ -297,17 +362,23 @@ def render_preset_section(key: str, label: str, data: dict, active: bool) -> str
         x = i * (chart_width / len(days_list))
         center_x = x + bar_width / 2
         count = counts[i]
+        info = data["daily"][day]
         height = (count / max_count) * (chart_height - 4) if count else 0
         dot_y = chart_height - height
         title = f"{day.strftime('%a %d.%m.%Y')}: {count} outage(s)"
+        if info["has_gap"]:
+            title += f" — not monitored {format_duration(info['gap_seconds'])}"
+        stem_class = "lollipop-stem-gap" if info["has_gap"] else "lollipop-stem"
+        dot_class = "lollipop-dot-gap" if info["has_gap"] else "lollipop-dot"
         count_bars.append(
-            f'<line class="lollipop-stem" x1="{center_x:.1f}" y1="{chart_height}" '
+            f'<line class="{stem_class}" x1="{center_x:.1f}" y1="{chart_height}" '
             f'x2="{center_x:.1f}" y2="{dot_y:.1f}"></line>'
-            f'<circle class="lollipop-dot" cx="{center_x:.1f}" cy="{dot_y:.1f}" r="5"><title>{title}</title></circle>'
+            f'<circle class="{dot_class}" cx="{center_x:.1f}" cy="{dot_y:.1f}" r="5"><title>{title}</title></circle>'
         )
         if count > 0:
+            label_class = "count-label-gap" if info["has_gap"] else "count-label"
             count_bars.append(
-                f'<text class="count-label" x="{center_x:.1f}" y="{dot_y - 10:.1f}" '
+                f'<text class="{label_class}" x="{center_x:.1f}" y="{dot_y - 10:.1f}" '
                 f'text-anchor="middle">{count}</text>'
             )
         if i % label_step == 0 or i == len(days_list) - 1:
@@ -339,6 +410,13 @@ def render_preset_section(key: str, label: str, data: dict, active: bool) -> str
 
     period_label = f'{data["start_date"].strftime("%d.%m.%Y")} - {data["end_date"].strftime("%d.%m.%Y")} ({data["days"]} days)'
     hidden = "" if active else " hidden"
+    gap_swatch = '<span class="legend-item"><span class="legend-swatch" style="background: var(--text-muted)"></span>No data</span>'
+    downtime_legend = (
+        f'<div class="legend">'
+        f'<span class="legend-item"><span class="legend-swatch" style="background: var(--status-critical)"></span>Downtime</span>'
+        f'{gap_swatch}</div>'
+        if has_gap_day else ""
+    )
 
     return f"""<div class="preset-view" data-preset="{key}"{hidden}>
   <p class="subtitle">{period_label}</p>
@@ -348,10 +426,12 @@ def render_preset_section(key: str, label: str, data: dict, active: bool) -> str
     <div class="tile"><div class="label">Total downtime</div><div class="value">{format_duration(data["total_downtime_seconds"])}</div></div>
     <div class="tile"><div class="label">Avg. outage length</div><div class="value">{format_duration(data["avg_duration_seconds"])}</div></div>
     <div class="tile"><div class="label">Avg. outages/day</div><div class="value">{data["avg_outages_per_day"]:.2f}</div></div>
+    <div class="tile"><div class="label">Monitored</div><div class="value">{data["monitored_days"]}/{data["days"]} days</div></div>
   </div>
 
   <div class="card">
     <h2>[ Downtime per day ]</h2>
+    {downtime_legend}
     <svg class="chart" viewBox="0 0 {chart_width} {chart_height + 24}" preserveAspectRatio="none">
       <line class="baseline" x1="0" y1="{chart_height}" x2="{chart_width}" y2="{chart_height}"></line>
       {bars_svg}
@@ -363,6 +443,7 @@ def render_preset_section(key: str, label: str, data: dict, active: bool) -> str
     <div class="legend">
       <span class="legend-item"><span class="legend-swatch" style="background: var(--status-critical)"></span>Outages/day</span>
       <span class="legend-item"><span class="legend-swatch" style="background: var(--series-1)"></span>Average</span>
+      {gap_swatch if has_gap_day else ""}
     </div>
     <svg class="chart" viewBox="0 0 {chart_width} {chart_height + 24}" preserveAspectRatio="none">
       <line class="baseline" x1="0" y1="{chart_height}" x2="{chart_width}" y2="{chart_height}"></line>
@@ -461,7 +542,7 @@ def render_dashboard_html(presets: list[tuple[str, str, dict]], active_key: str,
   .tab-btn:hover {{ color: var(--text-primary); }}
   .tab-btn.active {{ border-color: var(--anthracite); color: var(--text-primary); font-weight: 600; }}
   .subtitle {{ color: var(--text-secondary); margin: 4px 0 28px; font-size: 14px; }}
-  .tiles {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 28px; }}
+  .tiles {{ display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 28px; }}
   .tile {{
     background: var(--surface-1); border: 1px solid var(--border); border-left: 3px solid var(--anthracite);
     border-radius: 6px; padding: 16px; box-shadow: 0 1px 3px rgba(11,11,11,0.05);
@@ -482,14 +563,19 @@ def render_dashboard_html(presets: list[tuple[str, str, dict]], active_key: str,
   }}
   svg.chart {{ width: 100%; height: auto; overflow: visible; }}
   .bar {{ fill: var(--status-critical); }}
-  .bar:hover {{ opacity: 0.75; }}
+  .bar-gap {{ fill: var(--text-muted); }}
+  .bar:hover, .bar-gap:hover {{ opacity: 0.75; }}
   .downtime-label {{ fill: var(--status-critical); font-size: 10px; font-variant-numeric: tabular-nums; }}
+  .downtime-label-gap {{ fill: var(--text-muted); font-size: 10px; font-variant-numeric: tabular-nums; }}
   .axis-label {{ fill: var(--text-muted); font-size: 10px; }}
   .baseline {{ stroke: var(--baseline); stroke-width: 1; }}
   .average-line {{ stroke: var(--series-1); stroke-width: 2; stroke-dasharray: 4 3; }}
   .lollipop-stem {{ stroke: var(--status-critical); stroke-width: 2; }}
+  .lollipop-stem-gap {{ stroke: var(--text-muted); stroke-width: 2; }}
   .lollipop-dot {{ fill: var(--status-critical); }}
+  .lollipop-dot-gap {{ fill: var(--text-muted); }}
   .count-label {{ fill: var(--status-critical); font-size: 10px; font-variant-numeric: tabular-nums; }}
+  .count-label-gap {{ fill: var(--text-muted); font-size: 10px; font-variant-numeric: tabular-nums; }}
   .legend {{ display: flex; gap: 16px; margin-bottom: 12px; font-size: 12px; color: var(--text-secondary); }}
   .legend-item {{ display: flex; align-items: center; gap: 6px; }}
   .legend-swatch {{ width: 10px; height: 10px; border-radius: 2px; display: inline-block; }}

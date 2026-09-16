@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import json
 import tempfile
 import unittest
 from datetime import datetime, timedelta
@@ -63,6 +64,44 @@ class BuildOutagesTests(unittest.TestCase):
         self.assertEqual(uptime.build_outages([]), [])
 
 
+class ComputeCoverageGapsTests(unittest.TestCase):
+    def test_gap_detected_between_distant_events(self):
+        events = [
+            {"event": "alive", "timestamp": "2026-09-06T08:00:00"},
+            {"event": "alive", "timestamp": "2026-09-06T15:00:00"},
+        ]
+        gaps = uptime.compute_coverage_gaps(events, gap_threshold_seconds=1800)
+        # one gap between the two events, plus a trailing gap to "now"
+        self.assertEqual(gaps[0]["start"], datetime(2026, 9, 6, 8, 0, 0))
+        self.assertEqual(gaps[0]["end"], datetime(2026, 9, 6, 15, 0, 0))
+
+    def test_no_gap_when_events_are_close(self):
+        events = [
+            {"event": "alive", "timestamp": "2026-09-06T08:00:00"},
+            {"event": "alive", "timestamp": "2026-09-06T08:05:00"},
+        ]
+        now = datetime(2026, 9, 6, 8, 6, 0)
+        gaps = [
+            g
+            for g in uptime.compute_coverage_gaps(events, gap_threshold_seconds=1800)
+            if g["end"] <= now
+        ]
+        self.assertEqual(gaps, [])
+
+    def test_trailing_gap_to_now(self):
+        old_timestamp = (datetime.now() - timedelta(hours=2)).isoformat()
+        events = [{"event": "alive", "timestamp": old_timestamp}]
+        before = datetime.now()
+        gaps = uptime.compute_coverage_gaps(events, gap_threshold_seconds=1800)
+        after = datetime.now()
+        self.assertEqual(len(gaps), 1)
+        self.assertGreaterEqual(gaps[0]["end"], before)
+        self.assertLessEqual(gaps[0]["end"], after)
+
+    def test_no_events_means_no_gaps(self):
+        self.assertEqual(uptime.compute_coverage_gaps([]), [])
+
+
 class ComputeDashboardDataTests(unittest.TestCase):
     def test_counts_and_average_over_two_days(self):
         today = datetime.now().date()
@@ -96,6 +135,29 @@ class ComputeDashboardDataTests(unittest.TestCase):
         self.assertEqual(data["avg_duration_seconds"], 0.0)
         self.assertFalse(data["currently_down"])
 
+    def test_fully_covered_day_has_no_gap(self):
+        today = datetime.now().date()
+        start = datetime.combine(today, datetime.min.time())
+        # a heartbeat every 20 minutes (below the 30-minute gap threshold) all day
+        events = [
+            {"event": "alive", "timestamp": (start + timedelta(minutes=20 * i)).isoformat()}
+            for i in range(72)
+        ]
+        data = uptime.compute_dashboard_data(events, days=1)
+        self.assertFalse(data["daily"][today]["has_gap"])
+        self.assertEqual(data["monitored_days"], 1)
+
+    def test_day_with_silence_is_flagged_as_gap(self):
+        today = datetime.now().date()
+        events = [
+            {"event": "alive", "timestamp": f"{today}T00:05:00"},
+            # nothing else all day -> a large gap covers the rest of it
+        ]
+        data = uptime.compute_dashboard_data(events, days=1)
+        self.assertTrue(data["daily"][today]["has_gap"])
+        self.assertGreater(data["daily"][today]["gap_seconds"], 0)
+        self.assertEqual(data["monitored_days"], 0)
+
 
 class LogCheckRotationTests(unittest.TestCase):
     def setUp(self):
@@ -115,6 +177,37 @@ class LogCheckRotationTests(unittest.TestCase):
         self.assertTrue(rotated.exists())
         self.assertTrue(uptime.CHECKS_LOG_FILE.exists())
         self.assertLess(uptime.CHECKS_LOG_FILE.stat().st_size, uptime.MAX_CHECKS_LOG_SIZE * 5)
+
+
+class AppendJsonlTests(unittest.TestCase):
+    def test_heals_missing_trailing_newline(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "events.jsonl"
+            # simulate a prior write cut short before its trailing newline
+            path.write_text('{"event": "up", "timestamp": "2026-09-08T13:17:04"}')
+
+            uptime.append_jsonl(path, {"event": "alive", "timestamp": "2026-09-12T21:18:03"})
+
+            lines = path.read_text().splitlines()
+            self.assertEqual(len(lines), 2)
+            self.assertEqual(json.loads(lines[0])["event"], "up")
+            self.assertEqual(json.loads(lines[1])["event"], "alive")
+
+    def test_appends_normally_when_newline_already_present(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "events.jsonl"
+            path.write_text('{"event": "up", "timestamp": "2026-09-08T13:17:04"}\n')
+
+            uptime.append_jsonl(path, {"event": "alive", "timestamp": "2026-09-12T21:18:03"})
+
+            lines = path.read_text().splitlines()
+            self.assertEqual(len(lines), 2)
+
+    def test_creates_new_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "sub" / "events.jsonl"
+            uptime.append_jsonl(path, {"event": "alive", "timestamp": "2026-09-12T21:18:03"})
+            self.assertEqual(len(path.read_text().splitlines()), 1)
 
 
 if __name__ == "__main__":
